@@ -3,8 +3,6 @@
 # It takes inputs such as peptide sequence, plasmid size, desired N/P ratio, DNA amount, and peptide stock concentration.
 # The app provides detailed calculation results, including the mass and volume of peptide needed and the amino acid composition of the peptide.
 
-# Required packages
-
 library(shiny)
 library(stringr)
 
@@ -32,63 +30,100 @@ aa_properties <- list(
   V = list(name = "Valine", mw = 99.13, nitrogens = 1)
 )
 
-# Corrected calculate_aa_composition function
-# Corrected calculate_aa_composition function
-calculate_aa_composition <- function(sequence) {
-  aa_counts <- table(strsplit(sequence, "")[[1]])
+# calculate_aa_composition: returns composition, sequence length, peptide_mw (adjusted for water loss),
+# and counts of titratable/positively-charged side chains (K, R, H optionally).
+calculate_aa_composition <- function(sequence, include_Nterm = TRUE, pH = 7.4, his_protonation_fraction = NULL) {
+  seq_chars <- strsplit(sequence, "")[[1]]
+  # Validate sequence: only allowed one-letter codes
+  if (length(seq_chars) == 0 || any(!seq_chars %in% names(aa_properties))) {
+    stop("Sequence contains invalid or unsupported amino acid codes.")
+  }
+  aa_counts_table <- table(factor(seq_chars, levels = names(aa_properties)))
+  aa_counts <- as.numeric(aa_counts_table)
+  names(aa_counts) <- names(aa_properties)
+
   composition <- data.frame(
-    AA = names(aa_counts),
-    Count = as.numeric(aa_counts),
-    Name = sapply(names(aa_counts), function(aa) aa_properties[[aa]]$name),
-    MW = sapply(names(aa_counts), function(aa) aa_properties[[aa]]$mw),
-    Nitrogens = sapply(names(aa_counts), function(aa) aa_properties[[aa]]$nitrogens)
+    AA = names(aa_properties),
+    Count = aa_counts,
+    Name = sapply(names(aa_properties), function(aa) aa_properties[[aa]]$name),
+    Residue_MW = sapply(names(aa_properties), function(aa) aa_properties[[aa]]$mw),
+    stringsAsFactors = FALSE
   )
-  composition$Total_MW <- composition$Count * composition$MW
-  composition$Total_N <- composition$Count * composition$Nitrogens
-  
-  total_mw <- sum(composition$Total_MW) # Do not adjust for water loss
-  total_nitrogens <- sum(composition$Total_N)
-  
+
+  # Peptide molecular weight: sum(residue masses) - (n-1)*H2O (18.01528 Da)
+  n_residues <- sum(composition$Count)
+  sum_residue_mw <- sum(composition$Count * composition$Residue_MW)
+  peptide_mw <- if (n_residues > 0) sum_residue_mw - (n_residues - 1) * 18.01528 else 0
+
+  # Count titratable / positively charged groups:
+  # - Lysine (K): 1 positive per side chain at physiological pH
+  # - Arginine (R): 1 positive per side chain
+  # - Histidine (H): partial; user can supply fraction or default estimate based on Henderson-Hasselbalch
+  count_K <- composition$Count[composition$AA == "K"]
+  count_R <- composition$Count[composition$AA == "R"]
+  count_H <- composition$Count[composition$AA == "H"]
+
+  # If user doesn't provide fraction for histidine protonation, estimate from pKa ~6.0:
+  if (is.null(his_protonation_fraction)) {
+    his_pKa <- 6.0
+    his_protonation_fraction <- 1 / (1 + 10^(pH - his_pKa))
+  }
+  positive_from_sidechains <- count_K + count_R + count_H * his_protonation_fraction
+  positive_from_Nterm <- if (include_Nterm && n_residues > 0) 1 else 0
+
+  positive_charges_per_peptide <- as.numeric(positive_from_sidechains + positive_from_Nterm)
+
   list(
-    composition = composition,
-    total_mw = total_mw,
-    total_nitrogens = total_nitrogens
+    composition = composition[composition$Count > 0, , drop = FALSE],
+    sequence_length = n_residues,
+    peptide_mw = peptide_mw,
+    positive_charges_per_peptide = positive_charges_per_peptide,
+    positive_from_sidechains = positive_from_sidechains,
+    positive_from_Nterm = positive_from_Nterm
   )
 }
 
+# calculate_np_ratio: uses computed peptide_mw and positive charges rather than counting all nitrogens.
+# Parameters:
+#  - peptide_seq: sequence string
+#  - plasmid_size: in kb
+#  - np_ratio: desired N/P ratio (molar of positive charges to phosphate)
+#  - dna_amount: μg of DNA
+#  - dna_bp_mass: average mass per base pair in Da (default 660)
+#  - include_Nterm, pH: forwarded to aa composition
+calculate_np_ratio <- function(peptide_seq, plasmid_size, np_ratio, dna_amount,
+                               dna_bp_mass = 660, include_Nterm = TRUE, pH = 7.4, his_protonation_fraction = NULL) {
+  # bp and phosphates
+  bp <- plasmid_size * 1000
+  num_phosphates <- bp * 2  # dsDNA: 2 phosphates per bp
+  # DNA molecular weight (g/mol) for one plasmid molecule
+  dna_mw <- bp * dna_bp_mass
 
-
-# Updated calculate_np_ratio function
-calculate_np_ratio <- function(peptide_seq, plasmid_size, np_ratio, dna_amount, peptide_mw = 1877.4679) {
-  num_phosphates <- plasmid_size * 2000
-  dna_mw <- plasmid_size * 1000 * 650
+  # moles of DNA (mol) -- dna_amount given in μg, convert to g
   moles_dna <- (dna_amount * 1e-6) / dna_mw
   moles_phosphate <- moles_dna * num_phosphates
-  
-  aa_info <- calculate_aa_composition(peptide_seq)
-  nitrogens_per_peptide <- aa_info$total_nitrogens
-  
-  moles_peptide <- (moles_phosphate * np_ratio) / nitrogens_per_peptide
-  mass_peptide <- moles_peptide * peptide_mw * 1e6  # Convert to µg
-  
-  # Debugging output
-  print(paste("Plasmid size:", plasmid_size, "kb"))
-  print(paste("Number of phosphates:", num_phosphates))
-  print(paste("DNA molecular weight:", dna_mw, "Da"))
-  print(paste("Moles of DNA:", moles_dna, "mol"))
-  print(paste("Moles of phosphate:", moles_phosphate, "mol"))
-  print(paste("Nitrogens per peptide:", nitrogens_per_peptide))
-  print(paste("Peptide molecular weight:", peptide_mw, "Da"))
-  print(paste("Moles of peptide:", moles_peptide, "mol"))
-  print(paste("Mass of peptide:", mass_peptide, "µg"))
-  
+
+  # peptide composition and positive charges
+  aa_info <- calculate_aa_composition(peptide_seq, include_Nterm = include_Nterm, pH = pH, his_protonation_fraction = his_protonation_fraction)
+  positive_charges_per_peptide <- aa_info$positive_charges_per_peptide
+  peptide_mw <- aa_info$peptide_mw
+
+  if (positive_charges_per_peptide <= 0) {
+    stop("No positive charges detected in peptide. N/P calculation cannot proceed. Ensure your peptide has K/R or allow N-terminus counting.")
+  }
+  # moles of peptide needed (mol)
+  moles_peptide <- (moles_phosphate * np_ratio) / positive_charges_per_peptide
+  # mass of peptide needed (µg)
+  mass_peptide_ug <- moles_peptide * peptide_mw * 1e6
+
   list(
-    mass_peptide = mass_peptide,
+    mass_peptide = mass_peptide_ug,
     moles_phosphate = moles_phosphate,
-    nitrogens_per_peptide = nitrogens_per_peptide,
+    positive_charges_per_peptide = positive_charges_per_peptide,
     moles_peptide = moles_peptide,
     aa_composition = aa_info$composition,
-    peptide_mw = peptide_mw
+    peptide_mw = peptide_mw,
+    aa_info = aa_info
   )
 }
 
@@ -96,18 +131,21 @@ calculate_np_ratio <- function(peptide_seq, plasmid_size, np_ratio, dna_amount, 
 # UI
 ui <- fluidPage(
   titlePanel("N/P Ratio Calculator and Protocol for Peptide-DNA Complexes"),
-  
+
   sidebarLayout(
     sidebarPanel(
       textInput("peptide_seq", "Enter peptide sequence:", "KLALKLALKALKAALKLA"),
       numericInput("plasmid_size", "Enter plasmid size (kb):", 7.5, min = 0.1, step = 0.1),
       numericInput("np_ratio", "Enter desired N/P ratio:", 1.0, min = 0.1, step = 0.1),
       numericInput("dna_amount", "Enter DNA amount (µg):", 5.0, min = 0.1, step = 0.1),
-      numericInput("peptide_stock_conc", "Peptide stock concentration (mg/mL):", 1.0, min = 0.1, step = 0.1),
+      numericInput("peptide_stock_conc", "Peptide stock concentration (mg/mL):", 1.0, min = 0.001, step = 0.001),
       numericInput("final_volume", "Final complex volume (µL):", 50.0, min = 1.0, step = 1.0),
+      checkboxInput("include_Nterm", "Count N-terminus as +1", TRUE),
+      numericInput("pH", "Solution pH:", 7.4, min = 0.0, max = 14.0, step = 0.1),
+      numericInput("dna_bp_mass", "DNA mass per bp (Da):", 660, min = 600, max = 700, step = 1),
       actionButton("calculate", "Calculate")
     ),
-    
+
     mainPanel(
       tabsetPanel(
         tabPanel("Results",
@@ -220,7 +258,7 @@ ui <- fluidPage(
             </li>
             <li><strong>Calculate the number of moles of peptide needed:</strong>
               <ul>
-                <li>Moles of peptide = (Moles of phosphate * Desired N/P ratio) / Number of nitrogens per peptide</li>
+                <li>Moles of peptide = (Moles of phosphate * Desired N/P ratio) / Number of positively charged groups per peptide</li>
               </ul>
             </li>
             <li><strong>Calculate the mass of peptide needed:</strong>
@@ -230,146 +268,15 @@ ui <- fluidPage(
             </li>
             <li><strong>Calculate the volume of peptide stock solution:</strong>
               <ul>
-                <li>Volume = Mass of peptide / Concentration of stock solution</li>
+                <li>Volume = Mass of peptide / Concentration of stock solution (convert mg/mL to µg/µL: 1 mg/mL = 1 µg/µL)</li>
               </ul>
             </li>
-          </ol>
-          <h4>Nitrogen Content of Amino Acids:</h4>
-          <table style='border-collapse: collapse; width: 100%;'>
-            <tr style='background-color: #f2f2f2;'>
-              <th style='border: 1px solid #ddd; padding: 8px;'>Amino Acid</th>
-              <th style='border: 1px solid #ddd; padding: 8px;'>Code</th>
-              <th style='border: 1px solid #ddd; padding: 8px;'>Nitrogens</th>
-              <th style='border: 1px solid #ddd; padding: 8px;'>Notes</th>
-            </tr>
-            <tr>
-              <td style='border: 1px solid #ddd; padding: 8px;'>Alanine</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>A</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>1</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>Backbone only</td>
-            </tr>
-            <tr>
-              <td style='border: 1px solid #ddd; padding: 8px;'>Arginine</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>R</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>4</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>1 backbone + 3 side chain</td>
-            </tr>
-            <tr>
-              <td style='border: 1px solid #ddd; padding: 8px;'>Asparagine</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>N</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>2</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>1 backbone + 1 side chain</td>
-            </tr>
-            <tr>
-              <td style='border: 1px solid #ddd; padding: 8px;'>Aspartic Acid</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>D</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>1</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>Backbone only</td>
-            </tr>
-            <tr>
-              <td style='border: 1px solid #ddd; padding: 8px;'>Cysteine</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>C</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>1</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>Backbone only</td>
-            </tr>
-            <tr>
-              <td style='border: 1px solid #ddd; padding: 8px;'>Glutamic Acid</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>E</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>1</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>Backbone only</td>
-            </tr>
-            <tr>
-              <td style='border: 1px solid #ddd; padding: 8px;'>Glutamine</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>Q</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>2</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>1 backbone + 1 side chain</td>
-            </tr>
-            <tr>
-              <td style='border: 1px solid #ddd; padding: 8px;'>Glycine</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>G</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>1</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>Backbone only</td>
-            </tr>
-            <tr>
-              <td style='border: 1px solid #ddd; padding: 8px;'>Histidine</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>H</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>3</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>1 backbone + 2 side chain</td>
-            </tr>
-            <tr>
-              <td style='border: 1px solid #ddd; padding: 8px;'>Isoleucine</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>I</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>1</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>Backbone only</td>
-            </tr>
-            <tr>
-              <td style='border: 1px solid #ddd; padding: 8px;'>Leucine</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>L</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>1</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>Backbone only</td>
-            </tr>
-            <tr>
-              <td style='border: 1px solid #ddd; padding: 8px;'>Lysine</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>K</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>2</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>1 backbone + 1 side chain</td>
-            </tr>
-            <tr>
-              <td style='border: 1px solid #ddd; padding: 8px;'>Methionine</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>M</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>1</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>Backbone only</td>
-            </tr>
-            <tr>
-              <td style='border: 1px solid #ddd; padding: 8px;'>Phenylalanine</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>F</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>1</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>Backbone only</td>
-            </tr>
-            <tr>
-              <td style='border: 1px solid #ddd; padding: 8px;'>Proline</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>P</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>1</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>Backbone only</td>
-            </tr>
-            <tr>
-              <td style='border: 1px solid #ddd; padding: 8px;'>Serine</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>S</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>1</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>Backbone only</td>
-            </tr>
-            <tr>
-              <td style='border: 1px solid #ddd; padding: 8px;'>Threonine</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>T</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>1</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>Backbone only</td>
-            </tr>
-            <tr>
-              <td style='border: 1px solid #ddd; padding: 8px;'>Tryptophan</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>W</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>2</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>1 backbone + 1 side chain</td>
-            </tr>
-            <tr>
-              <td style='border: 1px solid #ddd; padding: 8px;'>Tyrosine</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>Y</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>1</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>Backbone only</td>
-            </tr>
-            <tr>
-              <td style='border: 1px solid #ddd; padding: 8px;'>Valine</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>V</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>1</td>
-              <td style='border: 1px solid #ddd; padding: 8px;'>Backbone only</td>
-            </tr>
-          </table>
-          <p><strong>Note:</strong> Each amino acid contributes one nitrogen atom from its backbone, except for Proline which has its nitrogen as part of a ring structure. Additional nitrogens are present in some side chains as noted.</p>")
-        )
-      ),
-      tags$hr(),
-      h4("Note:"),
-      p("This calculator uses the method described in the original protocol to count nitrogen atoms in the peptide sequence 
-        and calculate the required peptide amount. Always verify calculations and adjust protocols as needed for your specific experimental conditions.")
+          </ol>")
+        ),
+        tags$hr(),
+        h4("Note:"),
+        p("This calculator counts positively charged groups (K, R and partially H at specified pH) plus optional N-terminus as contributors to 'N' in the N/P ratio. Backbone amide nitrogens are not counted because they are not protonated under normal conditions.")
+      )
     )
   )
 )
@@ -377,47 +284,70 @@ ui <- fluidPage(
 # Server logic
 server <- function(input, output) {
   observeEvent(input$calculate, {
-    if (!grepl("^[ARNDCEQGHILKMFPSTWYV]+$", input$peptide_seq)) {
+    seq_input <- toupper(gsub("\\s+", "", input$peptide_seq))
+    if (!grepl("^[ARNDCEQGHILKMFPSTWYV]+$", seq_input)) {
       output$results <- renderText("Invalid peptide sequence. Please use only standard amino acid one-letter codes.")
-    } else {
-      results <- calculate_np_ratio(
-        input$peptide_seq, input$plasmid_size, input$np_ratio, input$dna_amount
-      )
-      
-      peptide_volume <- results$mass_peptide / input$peptide_stock_conc
-      dna_volume <- input$dna_amount  # Assuming 1 μg/μL DNA stock
-      buffer_volume <- input$final_volume - peptide_volume - dna_volume
-      
-      output$results <- renderText({
-        paste(
-          sprintf("Peptide mass needed: %.2f μg", results$mass_peptide),
-          sprintf("Peptide solution volume (%.1f mg/mL stock): %.2f µL", input$peptide_stock_conc, peptide_volume),
-          sprintf("DNA solution volume (1 μg/μL stock): %.2f µL", dna_volume),
-          sprintf("Buffer volume: %.2f µL", buffer_volume),
-          sprintf("Total volume: %.2f µL", input$final_volume),
-          sep = "\n"
-        )
-      })
-      
-      output$detailed_info <- renderText({
-        paste(
-          sprintf("DNA Information:"),
-          sprintf("  Amount of DNA: %.2f μg", input$dna_amount),
-          sprintf("  Plasmid size: %.2f kb", input$plasmid_size),
-          sprintf("  Moles of phosphate: %.2e mol", results$moles_phosphate),
-          sprintf("Peptide Information:"),
-          sprintf("  Molecular weight: %.2f g/mol", results$peptide_mw),
-          sprintf("  Nitrogens per peptide molecule (N): %d", results$nitrogens_per_peptide),
-          sprintf("  Moles of peptide: %.2e mol", results$moles_peptide),
-          sprintf("N/P Ratio: %.2f", input$np_ratio),
-          sep = "\n"
-        )
-      })
-      
-      output$aa_composition <- renderTable({
-        results$aa_composition
-      })
+      return()
     }
+
+    # Try-catch for calculation errors (e.g., no positive charges)
+    calc_ok <- TRUE
+    results <- NULL
+    tryCatch({
+      results <- calculate_np_ratio(
+        seq_input,
+        input$plasmid_size,
+        input$np_ratio,
+        input$dna_amount,
+        dna_bp_mass = input$dna_bp_mass,
+        include_Nterm = input$include_Nterm,
+        pH = input$pH
+      )
+    }, error = function(e) {
+      calc_ok <<- FALSE
+      output$results <- renderText(paste("Calculation error:", e$message))
+    })
+
+    if (!calc_ok) return()
+
+    # Convert peptide stock conc (mg/mL) to µg/µL: 1 mg/mL = 1 µg/µL
+    conc_ug_per_uL <- input$peptide_stock_conc
+    peptide_volume_uL <- results$mass_peptide / conc_ug_per_uL
+    dna_volume_uL <- input$dna_amount  # Assuming 1 μg/μL DNA stock
+    buffer_volume <- input$final_volume - peptide_volume_uL - dna_volume_uL
+
+    output$results <- renderText({
+      paste(
+        sprintf("Peptide mass needed: %.2f μg", results$mass_peptide),
+        sprintf("Peptide solution volume (%.3f mg/mL stock): %.2f µL", input$peptide_stock_conc, peptide_volume_uL),
+        sprintf("DNA solution volume (1 μg/μL stock): %.2f µL", dna_volume_uL),
+        sprintf("Buffer volume: %.2f µL", buffer_volume),
+        sprintf("Total planned volume: %.2f µL", input$final_volume),
+        sep = "\n"
+      )
+    })
+
+    output$detailed_info <- renderText({
+      paste(
+        sprintf("DNA Information:"),
+        sprintf("  Amount of DNA: %.2f μg", input$dna_amount),
+        sprintf("  Plasmid size: %.2f kb (%.0f bp)", input$plasmid_size, input$plasmid_size * 1000),
+        sprintf("  Moles of phosphate: %.2e mol", results$moles_phosphate),
+        sprintf("Peptide Information:"),
+        sprintf("  Molecular weight: %.2f g/mol", results$peptide_mw),
+        sprintf("  Positively charged groups per peptide (effective N): %.2f", results$positive_charges_per_peptide),
+        sprintf("  Moles of peptide: %.2e mol", results$moles_peptide),
+        sprintf("Requested N/P Ratio: %.2f", input$np_ratio),
+        sep = "\n"
+      )
+    })
+
+    output$aa_composition <- renderTable({
+      # Show composition table with counts and residue masses
+      comp <- results$aa_composition
+      comp$Residue_MW <- NULL
+      comp
+    }, rownames = FALSE)
   })
 }
 # Run the app
