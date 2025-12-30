@@ -1,8 +1,3 @@
-# Description:
-# This Shiny application calculates the required amount of peptide for a given N/P ratio when forming peptide-DNA complexes.
-# It takes inputs such as peptide sequence, plasmid size, desired N/P ratio, DNA amount, and peptide stock concentration.
-# The app provides detailed calculation results, including the mass and volume of peptide needed and the amino acid composition of the peptide.
-
 library(shiny)
 library(stringr)
 
@@ -129,12 +124,20 @@ calculate_np_ratio <- function(peptide_seq, plasmid_size, np_ratio, dna_amount,
 
 
 # UI
+# Add presets dropdown: Custom, MAP, HR9
+presets <- list(
+  Custom = "",
+  MAP = "KLALKLALKALKAALKLA",
+  HR9 = "CHHHHHRRRRRRRRRHHHHHC"
+)
+
 ui <- fluidPage(
   titlePanel("N/P Ratio Calculator and Protocol for Peptide-DNA Complexes"),
 
   sidebarLayout(
     sidebarPanel(
-      textInput("peptide_seq", "Enter peptide sequence:", "KLALKLALKALKAALKLA"),
+      selectInput("preset", "Peptide preset:", choices = names(presets), selected = "MAP"),
+      textInput("peptide_seq", "Enter peptide sequence:", presets$MAP),
       numericInput("plasmid_size", "Enter plasmid size (kb):", 7.5, min = 0.1, step = 0.1),
       numericInput("np_ratio", "Enter desired N/P ratio:", 1.0, min = 0.1, step = 0.1),
       numericInput("dna_amount", "Enter DNA amount (µg):", 5.0, min = 0.1, step = 0.1),
@@ -158,120 +161,15 @@ ui <- fluidPage(
         ),
         tabPanel("Complex Formation Protocol",
                  h3("Detailed Protocol for Peptide-DNA Complex Formation"),
-                 HTML("<ol>
-            <li><strong>Prepare stock solutions:</strong>
-              <ul>
-                <li>Prepare peptide stock solution (1 mg/mL) in nuclease-free water or suitable buffer.</li>
-                <li>Prepare plasmid DNA stock solution (1 µg/µL) in TE buffer or nuclease-free water.</li>
-              </ul>
-            </li>
-            <li><strong>Calculate required volumes:</strong>
-              <ul>
-                <li>Use the calculator in the 'Results' tab to determine the volumes of peptide and DNA needed.</li>
-              </ul>
-            </li>
-            <li><strong>Prepare complexes:</strong>
-              <ul>
-                <li>In a microcentrifuge tube, add the calculated volume of peptide solution.</li>
-                <li>Add the calculated volume of DNA solution.</li>
-                <li>Add buffer to reach the final desired volume.</li>
-                <li>Gently mix by pipetting up and down or flicking the tube.</li>
-              </ul>
-            </li>
-            <li><strong>Incubate:</strong>
-              <ul>
-                <li>Allow the mixture to incubate at room temperature for 30 minutes to form complexes.</li>
-              </ul>
-            </li>
-            <li><strong>Use or analyze:</strong>
-              <ul>
-                <li>The complexes are now ready for use in transfection experiments or further analysis (e.g., EMSA).</li>
-              </ul>
-            </li>
-          </ol>")
+                 HTML("<ol>\n            <li><strong>Prepare stock solutions:</strong>\n              <ul>\n                <li>Prepare peptide stock solution (1 mg/mL) in nuclease-free water or suitable buffer.</li>\n                <li>Prepare plasmid DNA stock solution (1 µg/µL) in TE buffer or nuclease-free water.</li>\n              </ul>\n            </li>\n            <li><strong>Calculate required volumes:</strong>\n              <ul>\n                <li>Use the calculator in the 'Results' tab to determine the volumes of peptide and DNA needed.</li>\n              </ul>\n            </li>\n            <li><strong>Prepare complexes:</strong>\n              <ul>\n                <li>In a microcentrifuge tube, add the calculated volume of peptide solution.</li>\n                <li>Add the calculated volume of DNA solution.</li>\n                <li>Add buffer to reach the final desired volume.</li>\n                <li>Gently mix by pipetting up and down or flicking the tube.</li>\n              </ul>\n            </li>\n            <li><strong>Incubate:</strong>\n              <ul>\n                <li>Allow the mixture to incubate at room temperature for 30 minutes to form complexes.</li>\n              </ul>\n            </li>\n            <li><strong>Use or analyze:</strong>\n              <ul>\n                <li>The complexes are now ready for use in transfection experiments or further analysis (e.g., EMSA).</li>\n              </ul>\n            </li>\n          </ol>")
         ),
         tabPanel("EMSA Protocol",
                  h3("Electrophoretic Mobility Shift Assay (EMSA) Protocol"),
-                 HTML("<ol>
-            <li><strong>Prepare materials:</strong>
-              <ul>
-                <li>1% agarose gel in TAE buffer</li>
-                <li>Ethidium bromide or other DNA stain</li>
-                <li>Gel electrophoresis apparatus</li>
-                <li>Loading dye</li>
-              </ul>
-            </li>
-            <li><strong>Prepare samples:</strong>
-              <ul>
-                <li>Prepare peptide-DNA complexes at various N/P ratios using the calculator.</li>
-                <li>Include a DNA-only control.</li>
-                <li>Add loading dye to each sample.</li>
-              </ul>
-            </li>
-            <li><strong>Load and run gel:</strong>
-              <ul>
-                <li>Load samples into wells of the agarose gel.</li>
-                <li>Run the gel at 100V for 30-45 minutes or until the dye front reaches 2/3 of the gel.</li>
-              </ul>
-            </li>
-            <li><strong>Visualize:</strong>
-              <ul>
-                <li>If not pre-stained, stain the gel with ethidium bromide or other DNA stain.</li>
-                <li>Visualize the gel under UV light.</li>
-              </ul>
-            </li>
-            <li><strong>Analyze:</strong>
-              <ul>
-                <li>Compare the migration of complexes to the DNA-only control.</li>
-                <li>Reduced migration and/or reduced fluorescence intensity indicate complex formation.</li>
-                <li>The optimal N/P ratio is typically the lowest ratio that shows complete complex formation.</li>
-              </ul>
-            </li>
-          </ol>")
+                 HTML("<ol>\n            <li><strong>Prepare materials:</strong>\n              <ul>\n                <li>1% agarose gel in TAE buffer</li>\n                <li>Ethidium bromide or other DNA stain</li>\n                <li>Gel electrophoresis apparatus</li>\n                <li>Loading dye</li>\n              </ul>\n            </li>\n            <li><strong>Prepare samples:</strong>\n              <ul>\n                <li>Prepare peptide-DNA complexes at various N/P ratios using the calculator.</li>\n                <li>Include a DNA-only control.</li>\n                <li>Add loading dye to each sample.</li>\n              </ul>\n            </li>\n            <li><strong>Load and run gel:</strong>\n              <ul>\n                <li>Load samples into wells of the agarose gel.</li>\n                <li>Run the gel at 100V for 30-45 minutes or until the dye front reaches 2/3 of the gel.</li>\n              </ul>\n            </li>\n            <li><strong>Visualize:</strong>\n              <ul>\n                <li>If not pre-stained, stain the gel with ethidium bromide or other DNA stain.</li>\n                <li>Visualize the gel under UV light.</li>\n              </ul>\n            </li>\n            <li><strong>Analyze:</strong>\n              <ul>\n                <li>Compare the migration of complexes to the DNA-only control.</li>\n                <li>Reduced migration and/or reduced fluorescence intensity indicate complex formation.</li>\n                <li>The optimal N/P ratio is typically the lowest ratio that shows complete complex formation.</li>\n              </ul>\n            </li>\n          </ol>")
         ),
         tabPanel("N/P Ratio Calculation",
                  h3("Protocol for Calculating N/P Ratio"),
-                 HTML("<ol>
-            <li><strong>Calculate the number of phosphates in the DNA:</strong>
-              <ul>
-                <li>Number of phosphates = Plasmid size (bp) * 2</li>
-                <li>Each base pair contributes 2 phosphates (one on each strand)</li>
-              </ul>
-            </li>
-            <li><strong>Calculate the number of moles of DNA:</strong>
-              <ul>
-                <li>Molecular weight of DNA = Plasmid size (bp) * 660 Da/bp</li>
-                <li>Moles of DNA = Mass of DNA (g) / Molecular weight of DNA (g/mol)</li>
-              </ul>
-            </li>
-            <li><strong>Calculate the number of moles of phosphate:</strong>
-              <ul>
-                <li>Moles of phosphate = Moles of DNA * Number of phosphates per DNA molecule</li>
-              </ul>
-            </li>
-            <li><strong>Count the number of nitrogen atoms in the peptide:</strong>
-              <ul>
-                <li>Count the number of each amino acid in the sequence</li>
-                <li>Multiply by the number of nitrogens in each amino acid (see table below)</li>
-                <li>Sum the total number of nitrogens</li>
-              </ul>
-            </li>
-            <li><strong>Calculate the number of moles of peptide needed:</strong>
-              <ul>
-                <li>Moles of peptide = (Moles of phosphate * Desired N/P ratio) / Number of positively charged groups per peptide</li>
-              </ul>
-            </li>
-            <li><strong>Calculate the mass of peptide needed:</strong>
-              <ul>
-                <li>Mass of peptide = Moles of peptide * Molecular weight of peptide</li>
-              </ul>
-            </li>
-            <li><strong>Calculate the volume of peptide stock solution:</strong>
-              <ul>
-                <li>Volume = Mass of peptide / Concentration of stock solution (convert mg/mL to µg/µL: 1 mg/mL = 1 µg/µL)</li>
-              </ul>
-            </li>
-          </ol>")
+                 HTML("<ol>\n            <li><strong>Calculate the number of phosphates in the DNA:</strong>\n              <ul>\n                <li>Number of phosphates = Plasmid size (bp) * 2</li>\n                <li>Each base pair contributes 2 phosphates (one on each strand)</li>\n              </ul>\n            </li>\n            <li><strong>Calculate the number of moles of DNA:</strong>\n              <ul>\n                <li>Molecular weight of DNA = Plasmid size (bp) * 660 Da/bp</li>\n                <li>Moles of DNA = Mass of DNA (g) / Molecular weight of DNA (g/mol)</li>\n              </ul>\n            </li>\n            <li><strong>Calculate the number of moles of phosphate:</strong>\n              <ul>\n                <li>Moles of phosphate = Moles of DNA * Number of phosphates per DNA molecule</li>\n              </ul>\n            </li>\n            <li><strong>Count the number of nitrogen atoms in the peptide:</strong>\n              <ul>\n                <li>Count the number of each amino acid in the sequence</li>\n                <li>Multiply by the number of nitrogens in each amino acid (see table below)</li>\n                <li>Sum the total number of nitrogens</li>\n              </ul>\n            </li>\n            <li><strong>Calculate the number of moles of peptide needed:</strong>\n              <ul>\n                <li>Moles of peptide = (Moles of phosphate * Desired N/P ratio) / Number of positively charged groups per peptide</li>\n              </ul>\n            </li>\n            <li><strong>Calculate the mass of peptide needed:</strong>\n              <ul>\n                <li>Mass of peptide = Moles of peptide * Molecular weight of peptide</li>\n              </ul>\n            </li>\n            <li><strong>Calculate the volume of peptide stock solution:</strong>\n              <ul>\n                <li>Volume = Mass of peptide / Concentration of stock solution (convert mg/mL to µg/µL: 1 mg/mL = 1 µg/µL)</li>\n              </ul>\n            </li>\n          </ol>")
         ),
         tags$hr(),
         h4("Note:"),
@@ -282,7 +180,15 @@ ui <- fluidPage(
 )
 
 # Server logic
-server <- function(input, output) {
+server <- function(input, output, session) {
+  # When preset changes, update peptide sequence input (unless Custom is selected)
+  observeEvent(input$preset, {
+    preset_seq <- presets[[input$preset]]
+    if (!is.null(preset_seq) && preset_seq != "") {
+      updateTextInput(session, "peptide_seq", value = preset_seq)
+    }
+  })
+
   observeEvent(input$calculate, {
     seq_input <- toupper(gsub("\\s+", "", input$peptide_seq))
     if (!grepl("^[ARNDCEQGHILKMFPSTWYV]+$", seq_input)) {
