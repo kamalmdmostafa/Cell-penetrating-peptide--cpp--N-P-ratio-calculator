@@ -1,3 +1,4 @@
+# Shiny app: Universal CPP N/P Calculator
 library(shiny)
 library(stringr)
 
@@ -51,9 +52,6 @@ calculate_aa_composition <- function(sequence, include_Nterm = TRUE, pH = 7.4, h
   peptide_mw <- if (n_residues > 0) sum_residue_mw - (n_residues - 1) * 18.01528 else 0
 
   # Count titratable / positively charged groups:
-  # - Lysine (K): 1 positive per side chain at physiological pH
-  # - Arginine (R): 1 positive per side chain
-  # - Histidine (H): partial; user can supply fraction or default estimate based on Henderson-Hasselbalch
   count_K <- composition$Count[composition$AA == "K"]
   count_R <- composition$Count[composition$AA == "R"]
   count_H <- composition$Count[composition$AA == "H"]
@@ -74,41 +72,59 @@ calculate_aa_composition <- function(sequence, include_Nterm = TRUE, pH = 7.4, h
     peptide_mw = peptide_mw,
     positive_charges_per_peptide = positive_charges_per_peptide,
     positive_from_sidechains = positive_from_sidechains,
-    positive_from_Nterm = positive_from_Nterm
+    positive_from_Nterm = positive_from_Nterm,
+    raw_counts = composition
   )
 }
 
-# calculate_np_ratio: uses computed peptide_mw and positive charges rather than counting all nitrogens.
-# Parameters:
-#  - peptide_seq: sequence string
-#  - plasmid_size: in kb
-#  - np_ratio: desired N/P ratio (molar of positive charges to phosphate)
-#  - dna_amount: μg of DNA
-#  - dna_bp_mass: average mass per base pair in Da (default 660)
-#  - include_Nterm, pH: forwarded to aa composition
-calculate_np_ratio <- function(peptide_seq, plasmid_size, np_ratio, dna_amount,
-                               dna_bp_mass = 660, include_Nterm = TRUE, pH = 7.4, his_protonation_fraction = NULL) {
-  # bp and phosphates
-  bp <- plasmid_size * 1000
-  num_phosphates <- bp * 2  # dsDNA: 2 phosphates per bp
-  # DNA molecular weight (g/mol) for one plasmid molecule
-  dna_mw <- bp * dna_bp_mass
+# Legacy calculation: count all nitrogens in residues (as prior app did)
+calculate_legacy_nitrogens <- function(sequence) {
+  seq_chars <- strsplit(sequence, "")[[1]]
+  aa_counts_table <- table(seq_chars)
+  total_nitrogens <- 0
+  for (aa in names(aa_counts_table)) {
+    if (!is.null(aa_properties[[aa]])) {
+      total_nitrogens <- total_nitrogens + as.numeric(aa_counts_table[[aa]]) * aa_properties[[aa]]$nitrogens
+    }
+  }
+  total_nitrogens
+}
 
-  # moles of DNA (mol) -- dna_amount given in μg, convert to g
-  moles_dna <- (dna_amount * 1e-6) / dna_mw
-  moles_phosphate <- moles_dna * num_phosphates
+# calculate_np_ratio: corrected approach (positive charges)
+calculate_np_ratio <- function(peptide_seq, molecule_type, length_value, np_ratio, dna_amount,
+                               mass_per_unit, include_Nterm = TRUE, pH = 7.4, his_protonation_fraction = NULL) {
+  # Determine bp/nt and phosphates
+  if (molecule_type == "Plasmid dsDNA (kb)") {
+    bp <- length_value * 1000
+    phosphates_per_molecule <- bp * 2
+    mw_per_molecule <- bp * mass_per_unit
+  } else if (molecule_type == "Linear dsDNA (bp)") {
+    bp <- length_value
+    phosphates_per_molecule <- bp * 2
+    mw_per_molecule <- bp * mass_per_unit
+  } else if (molecule_type == "dsRNA (bp)") {
+    bp <- length_value
+    phosphates_per_molecule <- bp * 2
+    mw_per_molecule <- bp * mass_per_unit
+  } else if (molecule_type == "ssRNA (nt)") {
+    nt <- length_value
+    phosphates_per_molecule <- nt * 1
+    mw_per_molecule <- nt * mass_per_unit
+  } else {
+    stop("Unsupported molecule type")
+  }
 
-  # peptide composition and positive charges
+  # moles of template (mol) -- dna_amount given in μg, convert to g
+  moles_template <- (dna_amount * 1e-6) / mw_per_molecule
+  moles_phosphate <- moles_template * phosphates_per_molecule
+
   aa_info <- calculate_aa_composition(peptide_seq, include_Nterm = include_Nterm, pH = pH, his_protonation_fraction = his_protonation_fraction)
   positive_charges_per_peptide <- aa_info$positive_charges_per_peptide
   peptide_mw <- aa_info$peptide_mw
 
-  if (positive_charges_per_peptide <= 0) {
-    stop("No positive charges detected in peptide. N/P calculation cannot proceed. Ensure your peptide has K/R or allow N-terminus counting.")
-  }
-  # moles of peptide needed (mol)
+  if (positive_charges_per_peptide <= 0) stop("No positive charges detected in peptide. N/P calculation cannot proceed.")
+
   moles_peptide <- (moles_phosphate * np_ratio) / positive_charges_per_peptide
-  # mass of peptide needed (µg)
   mass_peptide_ug <- moles_peptide * peptide_mw * 1e6
 
   list(
@@ -116,15 +132,56 @@ calculate_np_ratio <- function(peptide_seq, plasmid_size, np_ratio, dna_amount,
     moles_phosphate = moles_phosphate,
     positive_charges_per_peptide = positive_charges_per_peptide,
     moles_peptide = moles_peptide,
-    aa_composition = aa_info$composition,
     peptide_mw = peptide_mw,
     aa_info = aa_info
   )
 }
 
+# calculate_np_ratio_legacy: original (all nitrogens counted)
+calculate_np_ratio_legacy <- function(peptide_seq, molecule_type, length_value, np_ratio, dna_amount, mass_per_unit) {
+  # Determine bp/nt and phosphates
+  if (molecule_type == "Plasmid dsDNA (kb)") {
+    bp <- length_value * 1000
+    phosphates_per_molecule <- bp * 2
+    mw_per_molecule <- bp * mass_per_unit
+  } else if (molecule_type == "Linear dsDNA (bp)") {
+    bp <- length_value
+    phosphates_per_molecule <- bp * 2
+    mw_per_molecule <- bp * mass_per_unit
+  } else if (molecule_type == "dsRNA (bp)") {
+    bp <- length_value
+    phosphates_per_molecule <- bp * 2
+    mw_per_molecule <- bp * mass_per_unit
+  } else if (molecule_type == "ssRNA (nt)") {
+    nt <- length_value
+    phosphates_per_molecule <- nt * 1
+    mw_per_molecule <- nt * mass_per_unit
+  } else {
+    stop("Unsupported molecule type")
+  }
+
+  moles_template <- (dna_amount * 1e-6) / mw_per_molecule
+  moles_phosphate <- moles_template * phosphates_per_molecule
+
+  # Legacy: count all nitrogens in sequence
+  total_nitrogens <- calculate_legacy_nitrogens(peptide_seq)
+  # For MW we'll still compute sequence MW
+  aa_info <- calculate_aa_composition(peptide_seq, include_Nterm = TRUE)
+  peptide_mw <- aa_info$peptide_mw
+
+  moles_peptide <- (moles_phosphate * np_ratio) / total_nitrogens
+  mass_peptide_ug <- moles_peptide * peptide_mw * 1e6
+
+  list(
+    mass_peptide = mass_peptide_ug,
+    moles_phosphate = moles_phosphate,
+    nitrogens_per_peptide = total_nitrogens,
+    moles_peptide = moles_peptide,
+    peptide_mw = peptide_mw
+  )
+}
 
 # UI
-# Add presets dropdown: Custom, MAP, HR9
 presets <- list(
   Custom = "",
   MAP = "KLALKLALKALKAALKLA",
@@ -132,56 +189,51 @@ presets <- list(
 )
 
 ui <- fluidPage(
-  titlePanel("N/P Ratio Calculator and Protocol for Peptide-DNA Complexes"),
-
+  titlePanel("Universal CPP N/P Ratio Calculator"),
   sidebarLayout(
     sidebarPanel(
       selectInput("preset", "Peptide preset:", choices = names(presets), selected = "MAP"),
-      textInput("peptide_seq", "Enter peptide sequence:", presets$MAP),
-      numericInput("plasmid_size", "Enter plasmid size (kb):", 7.5, min = 0.1, step = 0.1),
-      numericInput("np_ratio", "Enter desired N/P ratio:", 1.0, min = 0.1, step = 0.1),
-      numericInput("dna_amount", "Enter DNA amount (µg):", 5.0, min = 0.1, step = 0.1),
+      textInput("peptide_seq", "Peptide sequence:", presets$MAP),
+      selectInput("molecule_type", "Molecule type:",
+                  choices = c("Plasmid dsDNA (kb)", "Linear dsDNA (bp)", "dsRNA (bp)", "ssRNA (nt)"),
+                  selected = "Plasmid dsDNA (kb)"),
+      uiOutput("length_input_ui"),
+      checkboxInput("show_legacy", "Show legacy (all-nitrogens) calculation", FALSE),
+      numericInput("mass_per_unit", "Mass per unit (Da) [editable]", value = 660, min = 100, step = 1),
+      numericInput("np_ratio", "Desired N/P ratio:", 1.0, min = 0.1, step = 0.1),
+      numericInput("dna_amount", "Template amount (µg):", 5.0, min = 0.001, step = 0.001),
       numericInput("peptide_stock_conc", "Peptide stock concentration (mg/mL):", 1.0, min = 0.001, step = 0.001),
       numericInput("final_volume", "Final complex volume (µL):", 50.0, min = 1.0, step = 1.0),
       checkboxInput("include_Nterm", "Count N-terminus as +1", TRUE),
       numericInput("pH", "Solution pH:", 7.4, min = 0.0, max = 14.0, step = 0.1),
-      numericInput("dna_bp_mass", "DNA mass per bp (Da):", 660, min = 600, max = 700, step = 1),
       actionButton("calculate", "Calculate")
     ),
-
     mainPanel(
       tabsetPanel(
         tabPanel("Results",
-                 h3("Calculation Results:"),
-                 verbatimTextOutput("results"),
-                 h3("Detailed Information:"),
-                 verbatimTextOutput("detailed_info"),
-                 h3("Amino Acid Composition:"),
+                 h3("Calculation Results"),
+                 verbatimTextOutput("results_modern"),
+                 conditionalPanel("input.show_legacy == true",
+                                  h3("Legacy Calculation (for comparison)"),
+                                  verbatimTextOutput("results_legacy")
+                 ),
+                 h3("Amino Acid Composition"),
                  tableOutput("aa_composition")
         ),
-        tabPanel("Complex Formation Protocol",
-                 h3("Detailed Protocol for Peptide-DNA Complex Formation"),
-                 HTML("<ol>\n            <li><strong>Prepare stock solutions:</strong>\n              <ul>\n                <li>Prepare peptide stock solution (1 mg/mL) in nuclease-free water or suitable buffer.</li>\n                <li>Prepare plasmid DNA stock solution (1 µg/µL) in TE buffer or nuclease-free water.</li>\n              </ul>\n            </li>\n            <li><strong>Calculate required volumes:</strong>\n              <ul>\n                <li>Use the calculator in the 'Results' tab to determine the volumes of peptide and DNA needed.</li>\n              </ul>\n            </li>\n            <li><strong>Prepare complexes:</strong>\n              <ul>\n                <li>In a microcentrifuge tube, add the calculated volume of peptide solution.</li>\n                <li>Add the calculated volume of DNA solution.</li>\n                <li>Add buffer to reach the final desired volume.</li>\n                <li>Gently mix by pipetting up and down or flicking the tube.</li>\n              </ul>\n            </li>\n            <li><strong>Incubate:</strong>\n              <ul>\n                <li>Allow the mixture to incubate at room temperature for 30 minutes to form complexes.</li>\n              </ul>\n            </li>\n            <li><strong>Use or analyze:</strong>\n              <ul>\n                <li>The complexes are now ready for use in transfection experiments or further analysis (e.g., EMSA).</li>\n              </ul>\n            </li>\n          </ol>")
-        ),
-        tabPanel("EMSA Protocol",
-                 h3("Electrophoretic Mobility Shift Assay (EMSA) Protocol"),
-                 HTML("<ol>\n            <li><strong>Prepare materials:</strong>\n              <ul>\n                <li>1% agarose gel in TAE buffer</li>\n                <li>Ethidium bromide or other DNA stain</li>\n                <li>Gel electrophoresis apparatus</li>\n                <li>Loading dye</li>\n              </ul>\n            </li>\n            <li><strong>Prepare samples:</strong>\n              <ul>\n                <li>Prepare peptide-DNA complexes at various N/P ratios using the calculator.</li>\n                <li>Include a DNA-only control.</li>\n                <li>Add loading dye to each sample.</li>\n              </ul>\n            </li>\n            <li><strong>Load and run gel:</strong>\n              <ul>\n                <li>Load samples into wells of the agarose gel.</li>\n                <li>Run the gel at 100V for 30-45 minutes or until the dye front reaches 2/3 of the gel.</li>\n              </ul>\n            </li>\n            <li><strong>Visualize:</strong>\n              <ul>\n                <li>If not pre-stained, stain the gel with ethidium bromide or other DNA stain.</li>\n                <li>Visualize the gel under UV light.</li>\n              </ul>\n            </li>\n            <li><strong>Analyze:</strong>\n              <ul>\n                <li>Compare the migration of complexes to the DNA-only control.</li>\n                <li>Reduced migration and/or reduced fluorescence intensity indicate complex formation.</li>\n                <li>The optimal N/P ratio is typically the lowest ratio that shows complete complex formation.</li>\n              </ul>\n            </li>\n          </ol>")
-        ),
-        tabPanel("N/P Ratio Calculation",
-                 h3("Protocol for Calculating N/P Ratio"),
-                 HTML("<ol>\n            <li><strong>Calculate the number of phosphates in the DNA:</strong>\n              <ul>\n                <li>Number of phosphates = Plasmid size (bp) * 2</li>\n                <li>Each base pair contributes 2 phosphates (one on each strand)</li>\n              </ul>\n            </li>\n            <li><strong>Calculate the number of moles of DNA:</strong>\n              <ul>\n                <li>Molecular weight of DNA = Plasmid size (bp) * 660 Da/bp</li>\n                <li>Moles of DNA = Mass of DNA (g) / Molecular weight of DNA (g/mol)</li>\n              </ul>\n            </li>\n            <li><strong>Calculate the number of moles of phosphate:</strong>\n              <ul>\n                <li>Moles of phosphate = Moles of DNA * Number of phosphates per DNA molecule</li>\n              </ul>\n            </li>\n            <li><strong>Count the number of nitrogen atoms in the peptide:</strong>\n              <ul>\n                <li>Count the number of each amino acid in the sequence</li>\n                <li>Multiply by the number of nitrogens in each amino acid (see table below)</li>\n                <li>Sum the total number of nitrogens</li>\n              </ul>\n            </li>\n            <li><strong>Calculate the number of moles of peptide needed:</strong>\n              <ul>\n                <li>Moles of peptide = (Moles of phosphate * Desired N/P ratio) / Number of positively charged groups per peptide</li>\n              </ul>\n            </li>\n            <li><strong>Calculate the mass of peptide needed:</strong>\n              <ul>\n                <li>Mass of peptide = Moles of peptide * Molecular weight of peptide</li>\n              </ul>\n            </li>\n            <li><strong>Calculate the volume of peptide stock solution:</strong>\n              <ul>\n                <li>Volume = Mass of peptide / Concentration of stock solution (convert mg/mL to µg/µL: 1 mg/mL = 1 µg/µL)</li>\n              </ul>\n            </li>\n          </ol>")
-        ),
-        tags$hr(),
-        h4("Note:"),
-        p("This calculator counts positively charged groups (K, R and partially H at specified pH) plus optional N-terminus as contributors to 'N' in the N/P ratio. Backbone amide nitrogens are not counted because they are not protonated under normal conditions.")
+        tabPanel("Help",
+                 h4("Notes and assumptions"),
+                 p("- Positive charges counted: Lys (K) and Arg (R) as +1 each, His (H) as partially protonated depending on pH (pKa ~6.0), optional N-terminus as +1 if selected."),
+                 p("- Legacy calculation counts all nitrogens (including backbone amide nitrogens) — this was the earlier method and is provided for comparison only."),
+                 p("- Mass per unit defaults: dsDNA/dsRNA = 660 Da/bp; ssRNA = 340 Da/nt. You can edit the Mass per unit field if your molecule is chemically modified.")
+        )
       )
     )
   )
 )
 
-# Server logic
+# Server
 server <- function(input, output, session) {
-  # When preset changes, update peptide sequence input (unless Custom is selected)
+  # Preset behavior
   observeEvent(input$preset, {
     preset_seq <- presets[[input$preset]]
     if (!is.null(preset_seq) && preset_seq != "") {
@@ -189,72 +241,110 @@ server <- function(input, output, session) {
     }
   })
 
+  # Dynamic length input UI
+  output$length_input_ui <- renderUI({
+    if (input$molecule_type == "Plasmid dsDNA (kb)") {
+      numericInput("length_value", "Plasmid size (kb):", value = 7.5, min = 0.001, step = 0.001)
+    } else if (input$molecule_type == "Linear dsDNA (bp)") {
+      numericInput("length_value", "DNA length (bp):", value = 7500, min = 1, step = 1)
+    } else if (input$molecule_type == "dsRNA (bp)") {
+      numericInput("length_value", "dsRNA length (bp):", value = 7500, min = 1, step = 1)
+    } else if (input$molecule_type == "ssRNA (nt)") {
+      numericInput("length_value", "ssRNA length (nt):", value = 7500, min = 1, step = 1)
+    }
+  })
+
+  # Update mass_per_unit defaults when molecule type changes
+  observeEvent(input$molecule_type, {
+    default <- if (input$molecule_type == "ssRNA (nt)") 340 else 660
+    updateNumericInput(session, "mass_per_unit", value = default)
+  })
+
   observeEvent(input$calculate, {
     seq_input <- toupper(gsub("\\s+", "", input$peptide_seq))
     if (!grepl("^[ARNDCEQGHILKMFPSTWYV]+$", seq_input)) {
-      output$results <- renderText("Invalid peptide sequence. Please use only standard amino acid one-letter codes.")
+      output$results_modern <- renderText("Invalid peptide sequence. Please use only standard amino acid one-letter codes.")
+      output$results_legacy <- renderText({})
       return()
     }
 
-    # Try-catch for calculation errors (e.g., no positive charges)
-    calc_ok <- TRUE
-    results <- NULL
+    # Gather inputs
+    molecule_type <- input$molecule_type
+    length_value <- isolate(input$length_value)
+    mass_per_unit <- input$mass_per_unit
+
+    # Modern calculation
+    modern_ok <- TRUE
+    modern_res <- NULL
     tryCatch({
-      results <- calculate_np_ratio(
-        seq_input,
-        input$plasmid_size,
-        input$np_ratio,
-        input$dna_amount,
-        dna_bp_mass = input$dna_bp_mass,
-        include_Nterm = input$include_Nterm,
-        pH = input$pH
-      )
+      modern_res <- calculate_np_ratio(seq_input, molecule_type, length_value, input$np_ratio, input$dna_amount,
+                                       mass_per_unit, include_Nterm = input$include_Nterm, pH = input$pH)
     }, error = function(e) {
-      calc_ok <<- FALSE
-      output$results <- renderText(paste("Calculation error:", e$message))
+      modern_ok <<- FALSE
+      output$results_modern <- renderText(paste("Calculation error:", e$message))
     })
 
-    if (!calc_ok) return()
+    if (modern_ok && !is.null(modern_res)) {
+      conc_ug_per_uL <- input$peptide_stock_conc
+      peptide_volume_uL <- modern_res$mass_peptide / conc_ug_per_uL
+      dna_volume_uL <- input$dna_amount  # assume 1 µg/µL DNA stock
+      buffer_volume <- input$final_volume - peptide_volume_uL - dna_volume_uL
 
-    # Convert peptide stock conc (mg/mL) to µg/µL: 1 mg/mL = 1 µg/µL
-    conc_ug_per_uL <- input$peptide_stock_conc
-    peptide_volume_uL <- results$mass_peptide / conc_ug_per_uL
-    dna_volume_uL <- input$dna_amount  # Assuming 1 μg/μL DNA stock
-    buffer_volume <- input$final_volume - peptide_volume_uL - dna_volume_uL
+      output$results_modern <- renderText({
+        paste(
+          sprintf("Corrected method (positive-charge based):"),
+          sprintf("  Peptide mass needed: %.3f μg", modern_res$mass_peptide),
+          sprintf("  Peptide solution volume (%.3f mg/mL stock): %.2f µL", input$peptide_stock_conc, peptide_volume_uL),
+          sprintf("  DNA/RNA solution volume (assumed stock 1 μg/μL): %.2f µL", dna_volume_uL),
+          sprintf("  Buffer volume: %.2f µL", buffer_volume),
+          sprintf("  Effective positive charges per peptide: %.3f", modern_res$positive_charges_per_peptide),
+          sprintf("  Peptide molecular weight: %.2f g/mol", modern_res$peptide_mw),
+          sprintf("  Moles of phosphate: %.3e mol", modern_res$moles_phosphate),
+          sep = "\n"
+        )
+      })
 
-    output$results <- renderText({
-      paste(
-        sprintf("Peptide mass needed: %.2f μg", results$mass_peptide),
-        sprintf("Peptide solution volume (%.3f mg/mL stock): %.2f µL", input$peptide_stock_conc, peptide_volume_uL),
-        sprintf("DNA solution volume (1 μg/μL stock): %.2f µL", dna_volume_uL),
-        sprintf("Buffer volume: %.2f µL", buffer_volume),
-        sprintf("Total planned volume: %.2f µL", input$final_volume),
-        sep = "\n"
-      )
-    })
+      output$aa_composition <- renderTable({
+        comp <- modern_res$aa_info$raw_counts
+        comp
+      }, rownames = TRUE)
+    }
 
-    output$detailed_info <- renderText({
-      paste(
-        sprintf("DNA Information:"),
-        sprintf("  Amount of DNA: %.2f μg", input$dna_amount),
-        sprintf("  Plasmid size: %.2f kb (%.0f bp)", input$plasmid_size, input$plasmid_size * 1000),
-        sprintf("  Moles of phosphate: %.2e mol", results$moles_phosphate),
-        sprintf("Peptide Information:"),
-        sprintf("  Molecular weight: %.2f g/mol", results$peptide_mw),
-        sprintf("  Positively charged groups per peptide (effective N): %.2f", results$positive_charges_per_peptide),
-        sprintf("  Moles of peptide: %.2e mol", results$moles_peptide),
-        sprintf("Requested N/P Ratio: %.2f", input$np_ratio),
-        sep = "\n"
-      )
-    })
+    # Legacy calculation (optional)
+    if (isTRUE(input$show_legacy)) {
+      legacy_ok <- TRUE
+      legacy_res <- NULL
+      tryCatch({
+        legacy_res <- calculate_np_ratio_legacy(seq_input, molecule_type, length_value, input$np_ratio, input$dna_amount, mass_per_unit)
+      }, error = function(e) {
+        legacy_ok <<- FALSE
+        output$results_legacy <- renderText(paste("Legacy calculation error:", e$message))
+      })
 
-    output$aa_composition <- renderTable({
-      # Show composition table with counts and residue masses
-      comp <- results$aa_composition
-      comp$Residue_MW <- NULL
-      comp
-    }, rownames = FALSE)
+      if (legacy_ok && !is.null(legacy_res)) {
+        conc_ug_per_uL <- input$peptide_stock_conc
+        peptide_volume_uL <- legacy_res$mass_peptide / conc_ug_per_uL
+        dna_volume_uL <- input$dna_amount
+        buffer_volume <- input$final_volume - peptide_volume_uL - dna_volume_uL
+
+        output$results_legacy <- renderText({
+          paste(
+            sprintf("Legacy method (all-nitrogens counted):"),
+            sprintf("  Peptide mass needed: %.3f μg", legacy_res$mass_peptide),
+            sprintf("  Peptide solution volume (%.3f mg/mL stock): %.2f µL", input$peptide_stock_conc, peptide_volume_uL),
+            sprintf("  DNA/RNA solution volume (assumed stock 1 μg/μL): %.2f µL", dna_volume_uL),
+            sprintf("  Buffer volume: %.2f µL", buffer_volume),
+            sprintf("  Nitrogens per peptide (legacy): %d", legacy_res$nitrogens_per_peptide),
+            sprintf("  Peptide molecular weight: %.2f g/mol", legacy_res$peptide_mw),
+            sprintf("  Moles of phosphate: %.3e mol", legacy_res$moles_phosphate),
+            sep = "\n"
+          )
+        })
+      }
+    } else {
+      output$results_legacy <- renderText({})
+    }
   })
 }
-# Run the app
+
 shinyApp(ui = ui, server = server)
